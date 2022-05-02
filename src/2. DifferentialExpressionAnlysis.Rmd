@@ -1,0 +1,92 @@
+---
+title: "Mycobacterium Tuberculosis Project"
+author: "Zaynab Mousavian"
+date: "Sep. 2021"
+output:
+  pdf_document: default
+  html_document:
+    theme:
+      bg: white
+      fg: black
+      base_font:
+        google: Prompt
+subtitle: Differential Expression Analysis
+---
+  
+**Outline:**  
+- Loading all data and packages
+- Differential expression analysis  
+- Showing Volcano plots (Figure 3)
+
+---
+# 1. Loading all data and packages   
+After changing the current working directory, you can load all necessary packages and also the data, prepared in the Preprocessing.Rmd file, which is ready for any further analysis.
+
+```{r, echo = TRUE,include=TRUE,message = FALSE,warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE,include=TRUE,message = FALSE,warning = FALSE)
+percentage=0.3
+inputDirectory <- paste0("../Results/Preprocessing/",as.character(percentage),"-")
+resultsDirectory <- paste0("../Results/DifferentialExpressionAnalysis/",as.character(percentage),"-")
+
+library(limma)
+library(ggrepel)
+library(ggplot2)
+library(ggvenn)
+library(reshape)
+library(reshape2)
+library(cowplot)
+lnames <- load(paste0(inputDirectory,"ReadyData.RData"))
+lnames
+```
+
+
+# 2. Differential expression analysis 
+We used the Limma R package to identify differential expressed proteins between three groups of samples including: Active, Healthy controls and Latent.
+
+```{r}
+f <- factor(groups)
+design <- model.matrix(~0+f)
+colnames(design) <- c("Active", "Latent", "Control")
+cont.matrix <- makeContrasts(Active-Control,Latent-Control,Active-Latent,levels=design)
+fit <- lmFit(dat_Expr, design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit.b <- eBayes(fit2)
+save(fit.b,file=paste0(resultsDirectory,"DE-Results.RData"))
+```
+
+# 3. Showing Volcano plots (Figure 3)
+
+```{r}
+volcanoPlot_func <- function(inputData, xaxis, yaxis,xlab) {
+  inputData$sig <- ifelse(inputData[,yaxis] <= 0.05&abs(inputData[,xaxis]) > 1, inputData$sig <- "Sig", inputData$sig <- "nSig")
+  ggplot(inputData, aes(x=.data[[xaxis]],y=-log10(.data[[yaxis]])))+
+    geom_point(aes(color = sig,size=2)) +
+    scale_color_manual(values = c("grey", "red")) +
+    theme_bw(base_size = 12) +
+    geom_text_repel(
+      data = subset(inputData, inputData[,yaxis] <= 0.05 & abs(inputData[,xaxis]) > 1), 
+      aes(label = Row.names),
+      size = 10,
+      box.padding = unit(0.35, "lines"),
+      point.padding = unit(0.3, "lines"),
+      segment.colour = "transparent") +
+    labs(y="-Log10(FDR)", x=paste0("Log2(",xlab,")"))+
+  theme(legend.position = "none",axis.title = element_text(size=22,face="bold"),axis.text = element_text(size=18)) 
+}
+
+logFC <- as.data.frame(fit.b$coefficients)
+pValue <- as.data.frame(fit.b$p.value)
+pValue2 <- apply(pValue,2,function(x) p.adjust(x,method = "fdr"))
+volcanoPlot_data <- cbind(logFC=logFC,pValue=pValue2)
+names(volcanoPlot_data) <- lapply(names(volcanoPlot_data), function(x) gsub(" - ",".",x))
+volcanoPlot_data$sig <- ifelse(volcanoPlot_data$pValue.Active.Control < 0.05&abs(volcanoPlot_data$logFC.Active.Control)>1, volcanoPlot_data$sig <- "Sig", volcanoPlot_data$sig <- "nSig")
+volcanoPlot_data$Row.names <- row.names(volcanoPlot_data)
+volcanoPlot1 <- volcanoPlot_func(volcanoPlot_data,"logFC.Active.Control","pValue.Active.Control","Active vs. Control")
+volcanoPlot2 <- volcanoPlot_func(volcanoPlot_data,"logFC.Active.Latent","pValue.Active.Latent","Active vs. Latent")
+volcanoPlot3 <- volcanoPlot_func(volcanoPlot_data,"logFC.Latent.Control","pValue.Latent.Control","Latent vs. Control")
+
+pdf(paste0(resultsDirectory,"Figure 3.pdf"),height = 10,width = 20)
+cowplot::plot_grid(volcanoPlot1,volcanoPlot2,ncol = 2,nrow = 1)
+dev.off()
+```
+

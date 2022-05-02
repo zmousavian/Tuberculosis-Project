@@ -1,0 +1,60 @@
+---
+title: "Mycobacterium Tuberculosis Project"
+author: "Zaynab Mousavian"
+date: "Nov. 2021"
+output:
+  pdf_document: default
+  html_document:
+    theme:
+      bg: white
+      fg: black
+      base_font:
+        google: Prompt
+subtitle: NetworkVisualization
+---
+  
+**Outline:**  
+- Loading all data and packages
+- Export network for visualization (Figure 2)
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Loading all data and packages  
+We firstly load all data and necessary R packages.
+
+```{r}
+library(WGCNA)
+library(reshape2)
+l=load("../Results/Coexpression/0.3-pearson-dataInput.RData")
+load("../Results/Coexpression/0.3-pearson-modules.RData")
+load("../Results/Coexpression/0.3-pearson-geneInfo.RData")
+load("../Results/DifferentialExpressionAnalysis/0.3-DE-Results.RData")
+modules= modules[-5]#remove grey module
+modules = unlist(modules)
+datExpr = datExpr[,modules]
+```
+
+# 2. Export network for visualization (Figure 2)
+To visualize network using Cytoscape, both nodes and network information were exported into text files.
+
+```{r}
+thr=0.65
+adjacencyMat <- adjacency(datExpr, power = 1, type="signed hybrid");
+m=lower.tri(adjacencyMat,diag = FALSE)
+m=melt(m)
+net = melt(adjacencyMat)
+net=net[which(m$value==TRUE),]
+names(net) = c("Protein1","Protein2","Correlation")
+net = net[which(net$Correlation>=thr),]
+logFC <- as.data.frame(fit.b$coefficients)
+pValue <- as.data.frame(fit.b$p.value)
+nodesInfo <- cbind(logFC=logFC,pValue=pValue)
+nodesInfo$Module=geneInfo[match(row.names(nodesInfo),geneInfo$Proteins),"moduleColor"]
+
+write.csv(net,file="../Results/Cytoscape/network.csv",quote=FALSE,row.names=FALSE)
+write.csv(nodesInfo,file="../Results/Cytoscape/nodesInfo.csv",quote=FALSE)
+```

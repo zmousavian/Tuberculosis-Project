@@ -1,0 +1,118 @@
+---
+title: "Mycobacterium Tuberculosis Project"
+author: "Zaynab Mousavian"
+date: "Oct. 2021"
+output:
+  pdf_document: default
+  html_document:
+    theme:
+      bg: white
+      fg: black
+      base_font:
+        google: Prompt
+subtitle: SignatureOverlap
+---
+  
+**Outline:**  
+- Loading all data and R packages 
+- Comparing our signature with published TB signatures (Figure 5C)
+- Showing overlap between published TB signatures (Figure S7)
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Loading all data and R packages 
+We firstly load all TB signatures, from the TBSignatureProfiler R package, and necessary R packages.
+
+```{r}
+suppressPackageStartupMessages({
+  library(TBSignatureProfiler)
+  library(SummarizedExperiment)
+  library(curatedTBData)
+})
+library(ggplot2)
+library(reshape)
+load("../Results/Coexpression/0.3-pearson-modules.RData")
+modules[[4]]=gsub("-","",modules[[4]])
+modules[[4]][3]="IFNG"
+modules[[4]][9]="CCL7"
+modules[[4]][14]="TGFB1"
+modules[[4]][15]="CD274"
+data=data.frame()
+modules[[4]]=modules[[4]][-c(6,8,12,14)]
+```
+
+# 2. Comparing our signature with published TB signatures (Figure 5C)
+We compared the 12-marker signature with the other published gene signatures from the TBSignatureProfiler R package and published protein signatures to investigate overlap between protein and transcriptional signatures with the proteins of our signature.
+
+```{r}
+overlap = function(gene){
+  data <<- rbind(data,unlist(lapply(TBsignatures, function(x) ifelse(length(grep(gene,x))!=0,1,0))))
+}
+lapply(modules[[4]],function(x) overlap(x))
+names(data)=names(TBsignatures)
+row.names(data)=modules[[4]]
+file=read.csv("../Manuscripts/Gene signatures/Summary.csv",sep=";")
+studies = file[which(file$Include=="Yes"),"Study"]
+data=data[,studies]
+
+file=read.csv("../Manuscripts/Gene signatures/Protein/new/Summary.csv",sep=";")
+file=file[file$Include.in.manuscript=="Yes",]
+data2=data.frame(genes=modules[[4]])
+lapply(file$Name,function(x) data2<<- cbind(data2,x))
+row.names(data2)=data2$genes
+data2=data2[,-1]
+names(data2)=data2[1,]
+data2[,]=0
+data2["IL6","Ahmad_4"]=2
+data2["IL6","Groote_6"]=2
+data2["IL6","Pedersen_6"]=2
+data2["VEGFA","Ahmad_4"]=2
+data2["VEGFA","Delemare_4"]=2
+data2["VEGFA","Pedersen_6"]=2
+data2["IFNG","Chegou_7"]=2
+data2["IFNG","Morris_9"]=2
+
+
+data=cbind(data2,data)
+
+
+colors=RColorBrewer::brewer.pal(8, "Dark2")
+data$gene=row.names(data)
+data=melt(data,id.vars = "gene")
+data$value=factor(data$value)
+pdf(file="../Results/Coexpression/Figure 5C.pdf",height = 5,width=15)
+ggplot(data,aes(x=variable,y=gene,fill=value))+
+  geom_tile(color="grey",size=0.15)+
+  scale_fill_manual(values=c("white", colors[1],colors[3]))+
+  theme(axis.text.x  = element_text(angle=90, hjust=1,vjust=0.5,size=10,face="bold"),axis.text.y.left  = element_text(hjust=0,size=10,face="bold"))
+dev.off()
+```
+
+# 3. Showing overlap between published TB signatures (Figure S7)
+We generate a heatmap plot to show the overlap in markers between studies investigating gene signatures aiming to discriminate active TB from latent TB, healthy controls, or other diseases.
+
+```{r}
+data=data.frame()
+
+overlap = function(gene){
+  data <<- rbind(data,unlist(lapply(TBsignatures, function(x) 100*length(intersect(gene,x))/min(length(gene),length(x)))))
+}
+lapply(TBsignatures,function(x) overlap(x))
+
+names(data)=names(TBsignatures)
+row.names(data)=names(TBsignatures)
+data$gene=row.names(data)
+data=melt(data,id.vars = "gene")
+data$text=lapply(data$value, function(x) ifelse(x!=0,x,""))
+
+pdf(file="../Results/Coexpression/Figure S7.pdf",height = 15,width=15)
+ggplot(data,aes(x=variable,y=gene,fill=value))+
+  geom_tile(color="grey",size=0.15)+
+  scale_fill_gradient(low = "white", high = "#CD3A8E") +
+  theme(axis.text.x  = element_text(angle=90, hjust=1,vjust=0.5,size=10,face="bold"),axis.text.y.left  = element_text(hjust=0,size=10,face="bold"))
+dev.off()
+```
+
