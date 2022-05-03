@@ -1,0 +1,448 @@
+---
+title: "Mycobacterium Tuberculosis Project"
+author: "Zaynab Mousavian"
+date: "Oct. 2021"
+output:
+  pdf_document: default
+  html_document:
+    theme:
+      bg: white
+      fg: black
+      base_font:
+        google: Prompt
+subtitle: SignatureValidation
+---
+  
+**Outline:**  
+- Loading data from the curatedTBData package  
+- Loading all data and R packages
+- Comparing all modules using GSVA package
+- Showing results of all methods on all modules (Figures S8-S10) 
+- Validating our signature using ssGSEA method
+- Showing ssGSEA results (Figure 5A)
+- Running wilcox test on ssGSEA results 
+- Validating our signature using QuSAGE method
+- Showing all QuSAGE results (Figure 5B)
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 1. Loading data from the curatedTBData package 
+we used the transcriptomic TB datasets from the curatedTBData R package to validate our signature in this study. We loaded all datat provided in this package and saved it as an R object, then used in further steps.
+
+```{r}
+library(curatedTBData)
+library(MultiAssayExperiment)
+data(DataSummary)
+row.names(DataSummary)=DataSummary$Study
+object_list <- curatedTBData(DataSummary$Study, dry.run = FALSE, curated.only = FALSE)
+save(object_list, DataSummary, file="../Datasets/curatedTBData/curatedTBData.RData")
+```
+
+# 2. Loading all data and R packages
+At first, we load all R packages, our 12-protein signature and all TB transcriptomics datasets for validating the signature.
+
+```{r}
+library(GSVA)
+library(CePa)
+library(qusage)
+library(ggplot2)
+library(limma)
+library(cowplot)
+library(reshape2)
+library(ggrepel)
+
+percentage <- 0.3
+corMeasure <- "pearson"
+run <- TRUE
+inputDirectory <- paste0("../Results/Coexpression/",
+                           as.character(percentage),"-",corMeasure,"-")
+load(paste0(inputDirectory,"modules.Rdata"))
+
+
+modules[[4]]=gsub("-","",modules[[4]])
+modules[[4]][3]="IFNG"
+modules[[4]][9]="CCL7"
+modules[[4]][14]="TGFB1"
+modules[[4]][15]="CD274"
+modules[[4]]=modules[[4]][-c(6,8,12,14)]
+
+modules[[1]][4]="EIF4EBP1"
+modules[[1]][3]="SULT1A1"
+
+modules[[2]][4]="S100A12"
+modules[[2]][5]="TGFA"
+
+load("../Datasets/curatedTBData/curatedTBData.RData")
+```
+
+# 3. Comparing all modules using GSVA package
+We applied all four modules to several independent cohorts using multiple gene set enrichment analysis methods. Nine transcriptomic TB datasets were selected based on the criteria of age >15, number of individuals per group >10 and no anti-TB treatment.
+
+```{r}
+studies=c("GSE73408", "GSE101705", "GSE19439", "GSE19442", "GSE19444",  "GSE42826", "GSE42830", "GSE83456", "GSE28623")
+GSE=data.frame()
+gsea = function(studyName){
+
+  data_Expr = assay(object_list[[studyName]])
+  boxplot(data_Expr)
+  pheno_Data = colData(object_list[[studyName]])
+  data_Traits= as.data.frame(pheno_Data[,"TBStatus",drop=FALSE])
+  names(data_Traits)="Type"
+  
+  data_Traits$Type=gsub("Control","Control",data_Traits$Type)
+  data_Traits$Type=gsub("LTBI","Latent",data_Traits$Type)
+  data_Traits$Type=gsub("PTB","Active",data_Traits$Type)
+  data_Traits$Type=gsub("OD","Other",data_Traits$Type)
+
+  GSE_func = function(methodName){
+    GSE_method <- methodName
+    GSE_results = gsva(as.matrix(data_Expr),modules,method=GSE_method)
+    row.names(GSE_results) = modNames
+    modNames_New = modNames[!modNames=="grey"]
+    GSE_results = GSE_results[modNames_New,]
+    GSE_results_melted = melt(GSE_results)
+    names(GSE_results_melted) = c("Module","Sample","Score")
+    GSE_results_melted$Type = unlist(lapply(GSE_results_melted$Sample, function(x) data_Traits[x,"Type"]))
+    GSE_results_melted$Method = GSE_method
+    GSE_results_melted$Dataset = studyName
+    GSE <<- rbind(GSE,GSE_results_melted)
+  }
+  lapply(c("ssgsea","gsva","zscore"),function(x) GSE_func(x))
+}
+lapply(studies, function(x) gsea(x))
+
+GSE=GSE[-which(GSE$Type=="Other"),]
+GSE=GSE[-which(GSE$Type=="Subclinical"),]
+GSE=GSE[-which(is.na(GSE$Type)),]
+GSE$Type = gsub("Healthy","Control",GSE$Type)
+GSE$Type <- factor(GSE$Type, levels = c("Active", "Latent", "Control"))
+GSE$Method <- factor(GSE$Method, levels = c("ssgsea", "gsva", "zscore"))
+GSE$Module <- factor(GSE$Module, levels = c("turquoise", "blue", "brown","yellow"))
+save(GSE,file="../Results/GeneSetEnrichment/curatedTBData-ALLModules-ALLMethods.RData")
+```
+
+# 4. Showing results of all methods on all modules (Figures S8-S10)
+The results of three enrichment methods (ssgsea, gsva and zscore) on all modules were shown in this section.
+
+```{r}
+load("../Results/GeneSetEnrichment/curatedTBData-ALLModules-ALLMethods.RData")
+method="ssgsea"
+GSE2=GSE[which(GSE$Method==method),]
+pdf(file=paste0("../Results/GeneSetEnrichment/Figure S8.pdf"),width=35,height = 30)
+
+ggplot(GSE2,aes(x=Module,y=Score,fill=Type))+
+  stat_boxplot(geom ='errorbar') +
+        geom_boxplot()+
+      scale_y_continuous(limits = c(-1,1))+
+        facet_wrap(~Dataset,scales ="fixed",nrow = 3,ncol=3)+
+        theme(axis.title.x = element_blank(), axis.title = element_text(size=40,face="bold"),axis.text=element_text(size=30),strip.text = element_text(size=40, face=2),legend.key.size = unit(4, 'cm'),legend.text = element_text(size=30),legend.title = element_blank())+
+        scale_fill_manual(values = c("#2F8AC4", "#E48725", "#A5AA99"))+
+  labs(y=paste0("Enrichment score using ",method," method"))
+
+dev.off()
+
+method="gsva"
+GSE2=GSE[which(GSE$Method==method),]
+pdf(file=paste0("../Results/GeneSetEnrichment/Figure S9.pdf"),width=35,height = 30)
+
+ggplot(GSE2,aes(x=Module,y=Score,fill=Type))+
+  stat_boxplot(geom ='errorbar') +
+        geom_boxplot()+
+      scale_y_continuous(limits = c(-1,1))+
+        facet_wrap(~Dataset,scales ="fixed",nrow = 3,ncol=3)+
+        theme(axis.title.x = element_blank(), axis.title = element_text(size=40,face="bold"),axis.text=element_text(size=30),strip.text = element_text(size=40, face=2),legend.key.size = unit(4, 'cm'),legend.text = element_text(size=30),legend.title = element_blank())+
+        scale_fill_manual(values = c("#2F8AC4", "#E48725", "#A5AA99"))+
+  labs(y=paste0("Enrichment score using ",method," method"))
+
+dev.off()
+
+method="zcore"
+GSE2=GSE[which(GSE$Method==method),]
+pdf(file=paste0("../Results/GeneSetEnrichment/Figure S10.pdf"),width=35,height = 30)
+
+ggplot(GSE2,aes(x=Module,y=Score,fill=Type))+
+  stat_boxplot(geom ='errorbar') +
+        geom_boxplot()+
+      scale_y_continuous(limits = c(-1,1))+
+        facet_wrap(~Dataset,scales ="fixed",nrow = 3,ncol=3)+
+        theme(axis.title.x = element_blank(), axis.title = element_text(size=40,face="bold"),axis.text=element_text(size=30),strip.text = element_text(size=40, face=2),legend.key.size = unit(4, 'cm'),legend.text = element_text(size=30),legend.title = element_blank())+
+        scale_fill_manual(values = c("#2F8AC4", "#E48725", "#A5AA99"))+
+  labs(y=paste0("Enrichment score using ",method," method"))
+
+dev.off()
+```
+
+
+# 5. Validating our signature using ssGSEA method
+To assess the significance of the 12-marker signature in independent TB cohorts, we performed ssGSEA on nine transcriptomic TB datasets from the curatedTBData R package.
+
+```{r}
+modules[[4]]=modules[[4]][-c(6,8,12,14)]
+studies=c("GSE73408", "GSE101705", "GSE19439", "GSE19442", "GSE19444",  "GSE42826", "GSE42830", "GSE83456", "GSE28623")
+
+f=function(studyName){
+  data_Expr = assay(object_list[[studyName]])
+  dim(data_Expr)
+  modules[[4]][which(modules[[4]]%in%row.names(data_Expr))]
+  length(which(modules[[4]]%in%row.names(data_Expr)))
+}
+lapply(studies, function(x) f(x))
+
+
+GSE=data.frame()
+gsea = function(studyName){
+  data_Expr = assay(object_list[[studyName]])
+  pheno_Data = colData(object_list[[studyName]])
+  data_Traits= as.data.frame(pheno_Data[,"TBStatus",drop=FALSE])
+  names(data_Traits)="Type"
+
+  data_Traits$Type=gsub("Control","Control",data_Traits$Type)
+  data_Traits$Type=gsub("LTBI","Latent",data_Traits$Type)
+  data_Traits$Type=gsub("PTB","Active",data_Traits$Type)
+  data_Traits$Type=gsub("OD","Other",data_Traits$Type)
+  
+  length(which(modules[[4]]%in%row.names(data_Expr)))
+  GSE_func = function(methodName){
+    GSE_method <- methodName
+    GSE_results = gsva(as.matrix(data_Expr),modules,method=GSE_method)
+    row.names(GSE_results) = modNames
+    modNames_New = modNames[modNames=="turquoise"]
+    GSE_results = GSE_results[modNames_New,,drop=FALSE]
+    GSE_results_melted = melt(GSE_results)
+    names(GSE_results_melted) = c("Module","Sample","Score")
+    GSE_results_melted$Type = unlist(lapply(GSE_results_melted$Sample, function(x) data_Traits[x,"Type"]))
+    GSE_results_melted$Method = GSE_method
+    GSE_results_melted$Dataset = studyName
+    GSE <<- rbind(GSE,GSE_results_melted)
+  }
+  lapply(c("ssgsea"),function(x) GSE_func(x))
+}
+lapply(studies, function(x) gsea(x))
+save(GSE,file=paste0(outputDirectory,"ssGSEA-curatedTBData.RData"))
+```
+
+# 6. Showing ssGSEA results (Figure 5A)
+
+```{r}
+lnames=load(paste0(outputDirectory,"ssGSEA-curatedTBData.RData"))
+GSE=GSE[-which(GSE$Type=="Other"),]
+#GSE=GSE[-which(GSE$Type=="Subclinical"),]
+GSE=GSE[-which(is.na(GSE$Type)),]
+GSE$Type = gsub("Healthy","Control",GSE$Type)
+GSE$Type = gsub("EActive","Active",GSE$Type)
+GSE$Type <- factor(GSE$Type, levels = c("Active", "Latent", "Control"))
+
+pdf(file=paste0(outputDirectory,"Figure 5A.pdf"),width=15,height = 20)
+
+ggplot(GSE,aes(x=Type,y=Score,fill=Type))+
+             geom_violin() + geom_jitter(height = 0, width = 0.1)+
+                scale_y_continuous(limits=c(-0.4,0.4)) + 
+                facet_wrap(~Dataset,scales = "fixed",nrow = 3,ncol = 3)+ 
+               theme(axis.title.x = element_blank(), axis.title = element_text(size=30,face="bold"),axis.text =element_text(size=20),strip.text = element_text(size=30, face=2))+
+        scale_fill_manual(values = c("#2F8AC4", "#E48725", "#A5AA99"))+
+  labs(y=paste0("Enrichment score using ssGSEA method"))
+ 
+dev.off()
+```
+
+# 7. Running wilcox test on ssGSEA results 
+We used the wilcox test to assess the statistical significance for the enrichment score difference between either active TB and Latent TB or Active TB and healthy controls.
+
+```{r}
+data=data.frame()
+diff=function(studyName){
+  selected=GSE[which(GSE$Dataset==studyName),]
+  score=selected$Score
+  f <- factor(selected$Type)
+  res1<- t.test(score[which(selected$Type=="Active")],score[which(selected$Type=="Control")])
+  res2<- wilcox.test(score[which(selected$Type=="Active")],score[which(selected$Type=="Control")])
+  data <<- rbind(data,cbind(pVal1=res1$p.value,pVal2=res2$p.value,name=studyName))
+}
+lapply(studies[c(3,5:9)],function(x) diff(x))
+lapply(studies[c(1:5,9)],function(x) diff(x))
+```
+
+# 8. Validating our signature using QuSAGE method
+Moreover, to verify that the protein signature was specific to active TB and not to other non-TB respiratory infections or diseases with clinical presentations similar to active TB, the qusage function from the QuSAGE R package was applied to datasets comparing active TB or non-TB disease to various control groups.
+
+## 8.1. Using TB transcriptomics datasets
+
+```{r}
+studies=c("GSE73408", "GSE101705", "GSE19439", "GSE19442", "GSE19444",  "GSE42826", "GSE42830", "GSE83456", "GSE28623")
+
+GSE=data.frame()
+gsea = function(studyName){
+  data_Expr = assay(object_list[[studyName]])
+  pheno_Data = colData(object_list[[studyName]])
+  data_Traits= as.data.frame(pheno_Data[,"TBStatus",drop=FALSE])
+  names(data_Traits)="Type"
+  data_Traits$Type=gsub("Control","Control",data_Traits$Type)
+  data_Traits$Type=gsub("LTBI","Latent",data_Traits$Type)
+  data_Traits$Type=gsub("PTB","Active",data_Traits$Type)
+  data_Traits$Type=gsub("OD","Other",data_Traits$Type)
+  
+  QuSAGE_func = function(contrastName){
+    QuSAGE_results = qusage(as.matrix(data_Expr),data_Traits$Type, contrastName,modules)
+    res = qsTable(QuSAGE_results)
+    plotCIsGenes(QuSAGE_results,path.index = 4,main = paste0(studyName,":",contrastName))
+    res=res["4",]
+    GSE <<- rbind(GSE,cbind(studyName,Comparison=contrastName,logFC = res$log.fold.change , pVal=res$p.Value, FDR=res$FDR))
+  }
+  if (length(which(data_Traits$Type=="Active"))!=0){
+    if (length(which(data_Traits$Type=="Control"))!=0){
+      QuSAGE_func("Active-Control")
+    }
+    else{
+      GSE <<- rbind(GSE,cbind(studyName,Comparison="Active-Control",logFC = NA , pVal=NA, FDR=NA))
+    }
+    if (length(which(data_Traits$Type=="Latent"))!=0){
+      QuSAGE_func("Active-Latent")
+    }
+    else{
+      GSE <<- rbind(GSE,cbind(studyName,Comparison="Active-Latent",logFC = NA , pVal=NA, FDR=NA))
+    }
+  }
+}
+lapply(studies, function(x) gsea(x))
+GSE$logFC=as.numeric(GSE$logFC)
+GSE$pVal=as.numeric(GSE$pVal)
+GSE$FDR = as.numeric(GSE$FDR)
+save(GSE,file = paste0(outputDirectory,"QuSAGE-curatedTBData.RData"))
+dev.off()
+```
+
+## 8.2 Using LRTI datasets 
+
+```{r}
+studies = c("GSE42026","GSE40012","GSE60244")
+
+f=function(studyName){
+  load(file=paste0("../Datasets/",studyName,"/ReadyData.RData"))
+  modules[[4]][which(modules[[4]]%in%row.names(data_Expr))]
+}
+lapply(studies, function(x) f(x))
+
+GSE= data.frame()
+gsea = function(studyName){
+ 
+  if (studyName == "GSE40012"){
+    l=load(file=paste0("../Datasets/",studyName,"/ReadyData-Day0.RData"))
+  }
+  else{
+    l=load(file=paste0("../Datasets/",studyName,"/ReadyData.RData"))
+  }
+  QuSAGE_func = function(contrastName){
+    
+    QuSAGE_results = qusage(as.matrix(data_Expr),data_Traits$Type, contrastName,modules)
+    res = qsTable(QuSAGE_results)
+    res=res["4",]
+    GSE <<- rbind(GSE,cbind(studyName,Comparison=contrastName,logFC = res$log.fold.change , pVal=res$p.Value, FDR=res$FDR))
+  }
+  if (studyName == "GSE60244"){
+    lapply(c("Virus-Control","Coinfection-Control","Bacteria-Control"), function(x) QuSAGE_func(x))
+  }
+  if (studyName == "GSE40012"){
+    lapply(c("Bacterial-Control","InfluenzaA-Control","SIR-Control"), function(x) QuSAGE_func(x))
+  }
+  if (studyName == "GSE42026"){
+    lapply(c("Bacterial-Control","H1N109-Control","RSV-Control"), function(x) QuSAGE_func(x))
+  }
+}
+lapply(studies, function(x) gsea(x))
+GSE$logFC=as.numeric(GSE$logFC)
+GSE$pVal=as.numeric(GSE$pVal)
+GSE$FDR = as.numeric(GSE$FDR)
+save(GSE,file = paste0(outputDirectory,"QuSAGE-LRTI-datasets.RData"))
+```
+
+## 8.3. Using Sarcoidosis datasets 
+
+```{r}
+studies=c("GSE83456","GSE42830","GSE42826")
+f=function(studyName){
+  data_Expr = assay(object_list[[studyName]])
+  modules[[4]][which(modules[[4]]%in%row.names(data_Expr))]
+ 
+}
+lapply(studies, function(x) f(x))
+
+GSE= data.frame()
+gsea = function(studyName){
+ 
+  data_Expr = assay(object_list[[studyName]])
+  pheno_Data = colData(object_list[[studyName]])
+  data_Traits= as.data.frame(pheno_Data[,"TBStatus",drop=FALSE])
+  names(data_Traits)="Type"
+  
+  data_Traits$Type=gsub("Control","Control",data_Traits$Type)
+  data_Traits$Type=gsub("LTBI","Latent",data_Traits$Type)
+  data_Traits$Type=gsub("PTB","Active",data_Traits$Type)
+  data_Traits$Type=gsub("OD","Other",data_Traits$Type)
+  
+  control_Samples = row.names(data_Traits[data_Traits$Type=="Control",,drop=FALSE])
+  disease_Samples = row.names(data_Traits[data_Traits$Type=="Other",,drop=FALSE])
+  data_Expr=data_Expr[,c(control_Samples,disease_Samples)]
+  data_Traits=data_Traits[c(control_Samples,disease_Samples),,drop=FALSE]
+  
+  QuSAGE_results = qusage(as.matrix(data_Expr),data_Traits$Type, "Other-Control",modules)
+  res = qsTable(QuSAGE_results)
+  res=res["4",]
+  GSE <<- rbind(GSE,cbind(studyName,Comparison="Other-Control",logFC = res$log.fold.change , pVal=res$p.Value, FDR=res$FDR))
+  
+}
+lapply(studies, function(x) gsea(x))
+GSE$logFC=as.numeric(GSE$logFC)
+GSE$pVal=as.numeric(GSE$pVal)
+GSE$FDR = as.numeric(GSE$FDR)
+save(GSE,file = paste0(outputDirectory,"QuSAGE-Sarcoidosis-datasets.RData"))
+```
+
+# 9. Showing all QuSAGE results (Figure 5B)
+
+```{r}
+load(paste0(outputDirectory,"QuSAGE-Sarcoidosis-datasets.RData"))
+GSE_0=GSE
+GSE_0$Type_of_Infection="Other"
+load(paste0(outputDirectory,"QuSAGE-LRTI-datasets.RData"))
+GSE_1=GSE
+GSE_1$Type_of_Infection="Other"
+load(paste0(outputDirectory,"QuSAGE-curatedTBData.RData"))
+GSE$Type_of_Infection="Tuberculosis"
+GSE_1$Type_of_Comparison = "other infection vs. controls"
+GSE_1[which(GSE_1$Comparison=="Bacterial-Control"),"trick"]=":1"
+GSE_1[which(GSE_1$Comparison=="H1N109-Control"),"trick"]=":2"
+GSE_1[which(GSE_1$Comparison=="RSV-Control"),"trick"]=":3"
+GSE_1[which(GSE_1$Comparison=="Bacterial-Control"),"trick"]=":1"
+GSE_1[which(GSE_1$Comparison=="InfluenzaA-Control"),"trick"]=":2"
+GSE_1[which(GSE_1$Comparison=="SIR-Control"),"trick"]=":3"
+GSE_1[which(GSE_1$Comparison=="Virus-Control"),"trick"]=":1"
+GSE_1[which(GSE_1$Comparison=="Coinfection-Control"),"trick"]=":2"
+GSE_1[which(GSE_1$Comparison=="Bacteria-Control"),"trick"]=":3"
+GSE[which(GSE$Comparison=="Active-Control"),"Type_of_Comparison"]="active TB vs. controls"
+GSE[which(GSE$Comparison=="Active-Control"),"trick"]=":1"
+GSE[which(GSE$Comparison=="Active-Latent"),"Type_of_Comparison"]="active TB vs. latent TB"
+GSE[which(GSE$Comparison=="Active-Latent"),"trick"]=":2"
+GSE_0$Type_of_Comparison = "other disease vs. controls"
+GSE_0[which(GSE_0$Comparison=="Other-Control"),"trick"]=":2"
+GSE=rbind(GSE,GSE_1,GSE_0)
+GSE=GSE[-which(is.na(GSE$logFC)),]
+GSE$Value = -log10(GSE$FDR)
+sep = ifelse(unlist(lapply(GSE$studyName,function(x) nchar(x)))==8,"  ","")
+GSE$Name = paste0 (GSE$studyName,sep,GSE$trick)
+GSE = GSE[order(GSE[,"Value"],decreasing = FALSE),,drop=FALSE]
+GSE$Name <- factor(GSE$Name, levels = GSE$Name[order(GSE[,"Value"],decreasing = FALSE)])
+
+pdf(file=paste0(outputDirectory,"Figure 5B.pdf"),width = 8,height = 10)
+ggplot(GSE,aes(x = Value, y = Name,group=1))+
+  geom_point(aes(shape = Type_of_Comparison,size=6)) +
+  scale_shape_manual(values = c(0,1,3,4)) +
+  coord_cartesian(xlim = c(0, 15))+
+  geom_vline(xintercept = 1.30 , color = "red", linetype = "dashed")+
+  labs( x=paste0("-Log10(FDR) using QuSAGE method"))+
+  theme(axis.title = element_text(size=14,face="bold"),axis.text = element_text(size=12))
+dev.off()
+```
+

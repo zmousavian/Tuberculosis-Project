@@ -1,0 +1,267 @@
+---
+title: "Mycobacterium Tuberculosis Project"
+author: "Zaynab Mousavian"
+date: "Sep. 2021"
+output:
+  pdf_document: default
+  html_document:
+    theme:
+      bg: white
+      fg: black
+      base_font:
+        google: Prompt
+subtitle: Data Preprocessing
+---
+  
+**Outline:**  
+- Reading data using OlinkAnalyze R package  
+- Sample filtering  
+- Bridge normalization   
+- Merging bridged datasets  
+- Filtering proteins  
+- Batch effect removal  
+
+---
+# 1. Getting started  
+Start by changing the current working directory to a desired path in your computer and then you need to install the OlinkAnalyze R Package.
+
+```{r setup, include=TRUE,message=FALSE,warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE,message = FALSE,warning = FALSE)
+
+# install.packages("devtools")
+# devtools::install_github(repo ='Olink-Proteomics/OlinkRPackage/OlinkAnalyze', build_vignettes = TRUE)
+```
+
+# 2. Reading data 
+Each Olink NPX data file can be read using a separate call of read_NPX function from the OlinkAnalyze R package. 
+
+```{r message=FALSE}
+workingDir="../Datasets/Preliminary Data/"
+setwd(workingDir)
+library(OlinkAnalyze)
+
+npx_data_June19 <- read_NPX(filename = "June-2019/NPX_data_files/Stimulated TB PBMCs (plasma samples)_NPX_LOD.xlsx")
+npx_data_Nov19 <- read_NPX(filename = "Nov-2019/NPX_data_files/MTB_plasma_profiling_NPX_LOD.xlsx")
+npx_data_Jan20 <- read_NPX("Jan-2020/NPX_data_files/TB_5_days_supernatant_NPX_LOD.xlsx")
+
+samples <- data.frame(read_excel("Samples.xlsx"))
+row.names(samples)=samples$SampleID
+
+npx_data_June19 <- merge(npx_data_June19,samples,by="SampleID")
+npx_data_Nov19 <- merge(npx_data_Nov19,samples,by="SampleID")
+npx_data_Jan20 <- merge(npx_data_Jan20,samples,by="SampleID")
+
+npx_data_June19$SampleID <- npx_data_June19$subjectID
+npx_data_Nov19$SampleID <- npx_data_Nov19$subjectID
+npx_data_Jan20$SampleID <- npx_data_Jan20$subjectID
+
+```
+
+# 3. Sample filtering  
+In this study, we firstly remove samples taken from the Portugous individuals and only keep the Swedish ones. Also samples with warning from Olink should be exculded before doing any further analysis.
+
+**Removing Portuguese samples**
+```{r message=FALSE}
+npx_data_Portugal <- npx_data_Nov19[which(npx_data_Nov19$Origin=="Portugal"),]
+npx_data_Portugal <- npx_data_Portugal[order(npx_data_Portugal$Assay,npx_data_Portugal$Group),]
+
+npx_data_June19 <-npx_data_June19[which(npx_data_June19$Origin=="Sweden"),]
+npx_data_Nov19 <- npx_data_Nov19[which(npx_data_Nov19$Origin=="Sweden"),]
+npx_data_Jan20 <- npx_data_Jan20[which(npx_data_Jan20$Origin=="Sweden"),]
+```
+
+**Removing samples with warning from Olink**
+```{r message=FALSE}
+npx_data_June19=npx_data_June19[which(npx_data_June19$QC_Warning == "Pass"),]
+npx_data_Nov19=npx_data_Nov19[which(npx_data_Nov19$QC_Warning == "Pass"),]
+npx_data_Jan20=npx_data_Jan20[which(npx_data_Jan20$QC_Warning == "Pass"),]
+```
+
+
+# 4. Bridge normalization
+Datasets have been normalized using the bridge samples which are common between different batches. In this study, eight samples are shared between June19 and Nov19 and two samples are in common between June19 and Jan20.
+
+**Between June_19 and Nov_19**
+```{r message=FALSE}
+bridge_samples_June19_Nov19 <- intersect(x = npx_data_June19$SampleID, y = npx_data_Nov19$SampleID)
+bridge_normalized_data_June19_Nov19 <- olink_normalization(df1 = npx_data_June19, df2 = npx_data_Nov19, 
+                                                           overlapping_samples_df1 = bridge_samples_June19_Nov19)
+```
+
+**Between June_19 and Jan_20**
+```{r message=FALSE}
+bridge_samples_June19_Jan20 <- intersect(x = npx_data_June19$SampleID, y = npx_data_Jan20$SampleID)
+bridge_normalized_data_June19_Jan20 <- olink_normalization(df1 = npx_data_June19, df2 = npx_data_Jan20,
+                                                           overlapping_samples_df1 = bridge_samples_June19_Jan20)
+```
+
+# 5. Merging bridged datasets
+In this step, we merge two datasets into new one by computing the mean values for repeated samples.
+```{r message=FALSE}
+bridge_normalized_data=rbind(bridge_normalized_data_June19_Nov19,bridge_normalized_data_June19_Jan20)
+bridge_normalized_data <- bridge_normalized_data[order(bridge_normalized_data$Group),]
+olink <- bridge_normalized_data[,c(1,5,12)]
+library(reshape2)
+olink <- dcast(olink, SampleID ~ factor(Assay, levels = unique(olink$Assay)), 
+               fun.aggregate=function(i) mean(i, na.rm=TRUE))
+rownames(olink) <- olink$SampleID
+olink <- olink[,-1]
+```
+
+# 6. Filtering proteins
+In this study, we removed proteins which have NPX values less than LOD in more than 30% of samples from the normalized dataset.
+
+```{r message=FALSE}
+percentage <- 0.3
+cutoff <- nrow(olink)*percentage
+resultsDirectory <- paste0("../Results/Preprocessing/",as.character(percentage),"-")
+nSamples <- nrow(olink)
+# Get LOD; since LOD varies between panels, collect individual LOD per protein then average them out
+LOD <- bridge_normalized_data_June19_Nov19[,c(5,8,11)]
+unique(LOD$Panel_Version)
+LOD <- as.data.frame(LOD[!duplicated(LOD$Assay),])
+LOD <- LOD[,-2]
+LOD$Assay <- as.character(LOD$Assay)
+rownames(LOD) <- LOD$Assay
+identical(LOD$Assay,colnames(olink)) #TRUE
+# Add LOD to olink df
+olink <- as.data.frame(t(olink))
+olink <- merge(olink, LOD[,2, drop=FALSE], by="row.names", all = TRUE)
+rownames(olink) <- olink$Row.names
+olink$Row.names <- NULL
+colnames(olink)[nSamples+1] <- "LOD"
+# Detect number of samples with limit of detection (LOD)
+num_LOD <- as.data.frame(apply(olink, 1, function(x) length(which(x[1:nSamples] <= x[nSamples+1])) ))
+olink <- merge(olink, num_LOD, by="row.names")
+rownames(olink) <- olink$Row.names
+olink <- olink[,-1]
+colnames(olink)[nSamples+2] <- "n_LOD"
+olink <- olink[,-(nSamples+1)] #remove LOD
+olink <- as.data.frame(t(olink))
+
+# Remove proteins from analysis where more than 30% of samples have NPX values less than LOD 
+filteredProteins <- which(olink[nSamples+1,] > cutoff)
+filteredOlink <- olink[-(nSamples+1),filteredProteins]
+filteredOlink$group <- samples[match(row.names(filteredOlink),samples$SampleID),"Group"]
+filteredOlink$sample <- row.names(filteredOlink)
+inputData <- melt(filteredOlink,id=c("sample","group"))
+names(inputData) <- c("Samples", "Groups", "Proteins", "NPX")
+inputData$Groups = gsub("Healthy controls","Control",inputData$Groups)
+inputData$Groups <- factor(inputData$Groups, levels = c("Active", "Latent", "Control"))
+pdf(file=paste0(resultsDirectory,"Figure S3.pdf"))
+ggplot(inputData,aes(x=Proteins,y=NPX,fill=Groups))+
+  geom_boxplot(aes(middle=mean(NPX)),fatten=1,outlier.size = 0.5)+
+  scale_fill_manual(values = c("#2F8AC4", "#E48725", "#A5AA99"))+
+  facet_wrap(~Proteins, scale="free",ncol=7)+
+  theme(axis.text=element_text(size=6),
+        axis.text.x=element_blank(),
+        axis.title = element_text(size=7,face="bold"),
+        strip.text = element_text(size=7),
+        legend.title = element_blank(), 
+        legend.text = element_text(size=7))
+dev.off()
+
+# Remaining proteins with less than 30% of samples have NPX values less than LOD 
+remainingProteins <- which(olink[nSamples+1,] <= cutoff)
+filteredOlink <- olink[-(nSamples+1),remainingProteins]
+filteredOlink$group <- samples[match(row.names(filteredOlink),samples$SampleID),"Group"]
+filteredOlink$sample <- row.names(filteredOlink)
+inputData <- melt(filteredOlink,id=c("sample","group"))
+names(inputData) <- c("Samples", "Groups", "Proteins", "NPX")
+inputData$Groups = gsub("Healthy controls","Control",inputData$Groups)
+inputData$Groups <- factor(inputData$Groups, levels = c("Active", "Latent", "Control"))
+pdf(file=paste0(resultsDirectory,"Figure S5.pdf"))
+ggplot(inputData,aes(x=Proteins,y=NPX,fill=Groups))+
+  geom_boxplot(aes(middle=mean(NPX)),fatten=1,outlier.size = 0.5)+
+  scale_fill_manual(values = c("#2F8AC4", "#E48725", "#A5AA99"))+
+  facet_wrap(~Proteins, scale="free",ncol=8)+
+  theme(axis.text=element_text(size=6),
+        axis.text.x=element_blank(),
+        axis.title = element_text(size=7,face="bold"),
+        strip.text = element_text(size=7),
+        legend.title = element_blank(), 
+        legend.text = element_text(size=7))
+dev.off()
+
+olink <- olink[,-filteredProteins] # 
+olink <- olink[-(nSamples+1),] #remove lod_n info
+```
+
+# 7. Batch effect removal
+To remove batch effect from the data, we firstly specify the groups and the batches of all samples and then we can run two different algorithms to see which one can perform better on our dataset.
+
+```{r message=FALSE}
+olink <- olink[unique(bridge_normalized_data$SampleID),]
+groups <- samples[match(row.names(olink),samples$SampleID),"Group"]
+batches <- samples[match(row.names(olink),samples$SampleID),"Batch"]
+samples_June_19=samples[which(samples$Batch=="June_19"),"subjectID"]
+batches[which(row.names(olink)%in%samples_June_19)] <- "June_19"
+```
+
+**Batch effect removal using the removebatcheffect fucntion from Limma R package** (Figure S1)
+```{r message=FALSE}
+library(limma)
+library(scatterplot3d)
+library(factoextra)
+groups=gsub("Healthy controls","Control",groups)
+dat_Expr <- t(olink)
+dat_Expr <- dat_Expr[,c(which(groups=="Active"),which(groups=="Latent"),which(groups=="Control"))]
+batches <- batches[c(which(groups=="Active"),which(groups=="Latent"),which(groups=="Control"))]
+groups = c(rep("Active",length(grep("Active",groups))),rep("Latent",length(grep("Latent",groups))),rep("Control",length(grep("Control",groups))))
+groups <- factor(groups, levels = c("Active", "Latent", "Control"))
+design <- model.matrix(~0+groups)
+colnames(design) <- c("Active","Latent","Control")
+dat_Expr_2 <- removeBatchEffect(dat_Expr, batch = batches ,design = design)
+
+pdf(file=paste0(resultsDirectory,"Figure S1.pdf"))
+par(mfrow=c(2,2))
+
+cols <- c(rep("#2F8AC4",20),rep("#E48725",14),rep("#A5AA99",10))
+
+pca <- prcomp(t(dat_Expr), scale=TRUE)
+scatterplot3d(pca$x[,1:3], pch=16, angle=45, color = cols,main = "Before",cex.main=1,cex.lab = 0.5,cex.axis = 0.5)
+
+pca <- prcomp(t(dat_Expr_2), scale=TRUE)
+scatterplot3d(pca$x[,1:3], pch=16, angle=45, color = cols,main = "After",cex.main=1,cex.lab = 0.5,cex.axis = 0.5)
+pca_x = pca$x
+
+legend("bottom",legend = levels(groups),col= c("#2F8AC4", "#E48725", "#A5AA99"), pch = 16,inset = -0.40, xpd = TRUE, horiz = TRUE)
+
+dev.off()
+scree <- fviz_eig(pca)
+screedata <- scree$data
+sum(screedata$eig[1:5]) 
+
+```
+
+
+**Batch effect removal using the combat fucntion from sva R package**
+```{r eval=FALSE, message=FALSE, include=FALSE}
+library(sva)
+library(scatterplot3d)
+library(factoextra)
+dat_Expr <- t(olink)
+dat_Expr_2 <- ComBat(dat_Expr, batch=as.vector(batches), par.prior=TRUE, mean.only=FALSE, prior.plots=FALSE)
+
+pdf(file=paste0(resultsDirectory,"batchEffectRemoval-sva.pdf"))
+par(mfrow=c(1,2))
+cols <- c(rep("red",20),rep("green",10),rep("blue",14))
+
+pca <- prcomp(t(dat_Expr), scale=TRUE)
+scatterplot3d(pca$x[,1:3], pch=16, angle=45, color = cols,main = "Before")
+
+pca <- prcomp(t(dat_Expr_2), scale=TRUE)
+scatterplot3d(pca$x[,1:3], pch=16, angle=45, color = cols,main = "After")
+dev.off()
+
+scree <- fviz_eig(pca)
+screedata <- scree$data
+sum(screedata$eig[1:5]) 
+```
+
+# 8. Saving R data objects
+```{r}
+dat_Expr=dat_Expr_2
+save(dat_Expr,groups,batches,file=paste0(resultsDirectory,"ReadyData.RData"))
+```
+
