@@ -4,6 +4,8 @@
 
 [Mousavian et al. medRxiv](https://www.medrxiv.org/content/medrxiv/early/2022/04/22/2022.04.22.22274170.full.pdf)
 
+![Flowchart](Flowchart.png)
+
 **Objectives:** Tuberculosis (TB) is a bacterial infectious disease caused by Mycobacterium
 tuberculosis. Annually, an estimated 10 million people are diagnosed with active TB, and
 approximately 1.4 million dies of the disease. If left untreated, each person with active TB
